@@ -2,7 +2,7 @@ use std::{collections::HashMap, process::ExitCode};
 
 use ai::{
     funcs::{FunctionArguments, FunctionBuilder},
-    history::{CachedHistory, FileHistory, LimitedHistory},
+    history::FileHistory,
     Chat, OpenAiPlatform,
 };
 use anyhow::{anyhow, Context};
@@ -174,9 +174,7 @@ async fn run() -> anyhow::Result<()> {
         .context("Failed to get state dir.")?
         .join("history.json");
 
-    let mut chat = Chat::<OpenAiPlatform, _>::with_history(LimitedHistory::new(
-        CachedHistory::new(FileHistory::new(history_path)),
-    ));
+    let mut chat = Chat::<OpenAiPlatform, _>::from(FileHistory::new(history_path));
 
     chat.system_message(Some(
         json!({

@@ -18,7 +18,8 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 use tracing::debug;
 
-#[derive(Default)]
+const DEFAULT_HISTORY_LIMIT: usize = 15;
+
 pub struct Chat<P, H>
 where
     P: Platform,
@@ -27,27 +28,46 @@ where
     platform: P,
     system_message: Option<String>,
     functions: Vec<Function>,
-    history: H,
+    history: Cache<H>,
+    /// Maximum number of messages in history.
+    history_limit: usize,
+}
+
+impl<P, H> Default for Chat<P, H>
+where
+    P: Platform + Default,
+    H: History + Send + Sync + Default,
+{
+    fn default() -> Self {
+        Self {
+            platform: P::default(),
+            history_limit: DEFAULT_HISTORY_LIMIT,
+            history: Cache::from(H::default()),
+            functions: vec![],
+            system_message: None,
+        }
+    }
+}
+
+impl<P, H> From<H> for Chat<P, H>
+where
+    P: Platform + Default,
+    H: History + Send + Sync,
+{
+    fn from(history: H) -> Self {
+        Self {
+            history: Cache::from(history),
+            platform: P::default(),
+            history_limit: DEFAULT_HISTORY_LIMIT,
+            functions: vec![],
+            system_message: None,
+        }
+    }
 }
 
 impl Chat<OpenAiPlatform, NoopHistory> {
     pub fn new() -> Self {
         Self::default()
-    }
-}
-
-impl<P, H> Chat<P, H>
-where
-    P: Platform + Default,
-    H: History + Send + Sync,
-{
-    pub fn with_history(history: H) -> Self {
-        Self {
-            history,
-            platform: Default::default(),
-            system_message: None,
-            functions: vec![],
-        }
     }
 }
 
@@ -90,8 +110,19 @@ where
             .filter(|message| !message.is_system())
             .collect::<Vec<_>>();
 
+        let messages_len = messages.len();
+
+        let messages = if messages_len > self.history_limit {
+            messages
+                .into_iter()
+                .skip(self.history_limit.abs_diff(messages_len))
+                .collect()
+        } else {
+            messages
+        };
+
         self.history
-            .write(&messages)
+            .write(messages)
             .await
             .map_err(SendError::WriteHistory)?;
 
@@ -176,7 +207,7 @@ where
         if let Some(system_message) = &self.system_message {
             messages.push(Message::System(system_message.clone()));
         }
-        messages.extend(history);
+        messages.extend(history.clone());
         messages.push(Message::User(user_message.to_string()));
 
         Ok(messages)
@@ -236,7 +267,6 @@ impl Platform for OpenAiPlatform {
     ) -> Result<AssistantMessage, Self::Err>
     where
         M: IntoIterator<Item = Message> + Send,
-
         M::IntoIter: Send,
     {
         let request = CreateChatCompletionRequest {
@@ -268,5 +298,37 @@ impl Default for OpenAiPlatform {
         Self {
             client: Client::new(),
         }
+    }
+}
+
+/// Stands between `Chat` and `History` and caches messages to not read them all the time.
+struct Cache<H: History> {
+    history: H,
+    messages: Option<Vec<Message>>,
+}
+
+impl<H: History> From<H> for Cache<H> {
+    fn from(history: H) -> Self {
+        Self {
+            history,
+            messages: None,
+        }
+    }
+}
+
+impl<H: History> Cache<H> {
+    async fn read(&mut self) -> Result<&Vec<Message>, H::Err> {
+        if self.messages.is_none() {
+            let messages = self.history.read().await?;
+            self.messages = Some(messages.clone());
+        }
+
+        Ok(self.messages.as_ref().unwrap())
+    }
+
+    async fn write(&mut self, messages: Vec<Message>) -> Result<(), H::Err> {
+        self.history.write(&messages).await?;
+        self.messages = Some(messages);
+        Ok(())
     }
 }
