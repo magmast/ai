@@ -8,21 +8,71 @@ use ai::{
 use anyhow::{anyhow, Context};
 use dialoguer::Confirm;
 use directories::ProjectDirs;
+use futures::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::process::Command;
-use tracing::debug;
+use tracing::{debug, warn};
+use tracing_subscriber::{prelude::*, Layer, Registry};
 
 const USEFUL_ENV: &[&str] = &["LANG", "PWD", "HOME", "PATH", "TERM"];
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    if let Err(err) = run().await {
+    let result =
+        async { ProjectDirs::from("dev", "magmast", "ai").context("Failed to get project dirs.") }
+            .and_then(|project_dirs| {
+                init_logging(&project_dirs);
+                run(project_dirs)
+            })
+            .await;
+
+    if let Err(err) = result {
         eprintln!("{:?}", err);
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
     }
+}
+
+async fn run(project_dirs: ProjectDirs) -> anyhow::Result<()> {
+    let history_path = project_dirs
+        .state_dir()
+        .context("Failed to get state dir.")?
+        .join("history.json");
+
+    let mut chat = Chat::<OpenAiPlatform, _>::from(FileHistory::new(history_path));
+
+    chat.system_message(Some(
+        json!({
+            "message": include_str!("../../../assets/system_message.txt"),
+            "os": os_info().context("Failed to get os info.")?,
+        })
+        .to_string(),
+    ))
+    .function(
+        Into::<FunctionBuilder<_, _, _>>::into(execute_shell_script).description(Some(
+            include_str!("../../../assets/execute_shell_script_description.txt").into(),
+        )),
+    )
+    .function(
+        Into::<FunctionBuilder<_, _, _>>::into(execute_python_script).description(Some(
+            include_str!("../../../assets/execute_python_script_description.txt").into(),
+        )),
+    );
+
+    let response = chat
+        .send(
+            std::env::args()
+                .skip(1)
+                .reduce(|acc, arg| format!("{} {}", acc, arg))
+                .context("Sorry, but I cannot help, if your message is empty.")?,
+        )
+        .await?;
+
+    println!("{response}");
+
+    Ok(())
 }
 
 struct Script<'a> {
@@ -165,45 +215,28 @@ struct ExecuteShellScriptFunctionOutput {
     stderr: String,
 }
 
-async fn run() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+fn init_logging(project_dirs: &ProjectDirs) {
+    let stderr_layer =
+        tracing_subscriber::fmt::layer().with_filter(tracing_subscriber::filter::LevelFilter::INFO);
 
-    let history_path = ProjectDirs::from("dev", "magmast", "ai")
-        .context("Failed to get project dirs.")?
+    let file_layer = project_dirs
         .state_dir()
-        .context("Failed to get state dir.")?
-        .join("history.json");
+        .context("Failed to get the log file path.")
+        .map(|state_dir| state_dir.join("logs"))
+        .map(|path| tracing_appender::rolling::daily(path, "ai"))
+        .map(|appender| {
+            tracing_subscriber::fmt::layer()
+                .with_writer(appender)
+                .with_ansi(false)
+                .with_filter(tracing_subscriber::filter::LevelFilter::TRACE)
+        });
 
-    let mut chat = Chat::<OpenAiPlatform, _>::from(FileHistory::new(history_path));
-
-    chat.system_message(Some(
-        json!({
-            "message": include_str!("../../../assets/system_message.txt"),
-            "os": os_info().context("Failed to get os info.")?,
-        })
-        .to_string(),
-    ))
-    .function(
-        Into::<FunctionBuilder<_, _, _>>::into(execute_shell_script).description(Some(
-            include_str!("../../../assets/execute_shell_script_description.txt").into(),
-        )),
-    )
-    .function(
-        Into::<FunctionBuilder<_, _, _>>::into(execute_python_script).description(Some(
-            include_str!("../../../assets/execute_python_script_description.txt").into(),
-        )),
-    );
-
-    let response = chat
-        .send(
-            std::env::args()
-                .skip(1)
-                .reduce(|acc, arg| format!("{} {}", acc, arg))
-                .context("Sorry, but I cannot help, if your message is empty.")?,
-        )
-        .await?;
-
-    println!("{response}");
-
-    Ok(())
+    let registry = Registry::default().with(stderr_layer);
+    match file_layer {
+        Ok(file_layer) => registry.with(file_layer).init(),
+        Err(err) => {
+            registry.init();
+            warn!(%err, "Failed to open log file.");
+        }
+    }
 }

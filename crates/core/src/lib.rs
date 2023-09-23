@@ -1,6 +1,7 @@
 pub mod dto;
 pub mod funcs;
 pub mod history;
+pub mod utils;
 
 use std::future::Future;
 
@@ -269,7 +270,7 @@ impl Platform for OpenAiPlatform {
         M::IntoIter: Send,
     {
         let request = CreateChatCompletionRequest {
-            model: "gpt-3.5-turbo".to_string(),
+            model: "gpt-3.5-turbo-16k".to_string(),
             functions: Some(
                 functions
                     .into_iter()
