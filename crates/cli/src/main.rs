@@ -31,7 +31,7 @@ struct Script<'a> {
     content: &'a str,
 }
 
-async fn execute_script<'a>(script: Script<'a>) -> anyhow::Result<String> {
+async fn execute_script(script: Script<'_>) -> anyhow::Result<String> {
     if !Confirm::new()
         .with_prompt(format!(
             "I need to execute the following {} script:\n\n{}\n\nDo you want to proceed?",

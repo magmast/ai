@@ -11,34 +11,30 @@ pub enum Message {
 
 impl Message {
     pub fn is_system(&self) -> bool {
-        if let Self::System(_) = &self {
-            true
-        } else {
-            false
-        }
+        matches!(self, Self::System(_))
     }
 }
 
-impl Into<ChatCompletionRequestMessage> for Message {
-    fn into(self) -> ChatCompletionRequestMessage {
-        match self {
-            Self::System(content) => ChatCompletionRequestMessage {
+impl From<Message> for ChatCompletionRequestMessage {
+    fn from(message: Message) -> Self {
+        match message {
+            Message::System(content) => ChatCompletionRequestMessage {
                 role: Role::System,
                 content: Some(content),
                 ..Default::default()
             },
-            Self::User(content) => ChatCompletionRequestMessage {
+            Message::User(content) => ChatCompletionRequestMessage {
                 role: Role::User,
                 content: Some(content),
                 ..Default::default()
             },
-            Self::Function { name, content } => ChatCompletionRequestMessage {
+            Message::Function { name, content } => ChatCompletionRequestMessage {
                 role: Role::Function,
                 content: Some(content),
                 name: Some(name),
                 ..Default::default()
             },
-            Self::Assistant(message) => message.into(),
+            Message::Assistant(message) => message.into(),
         }
     }
 }
@@ -49,16 +45,16 @@ pub enum AssistantMessage {
     FunctionCall(FunctionCall),
 }
 
-impl Into<ChatCompletionRequestMessage> for AssistantMessage {
-    fn into(self) -> ChatCompletionRequestMessage {
-        let (content, fc) = match self {
-            Self::Content(content) => (Some(content), None),
-            Self::FunctionCall(fc) => (None, Some(fc)),
+impl From<AssistantMessage> for ChatCompletionRequestMessage {
+    fn from(assitant_message: AssistantMessage) -> ChatCompletionRequestMessage {
+        let (content, fc) = match assitant_message {
+            AssistantMessage::Content(content) => (Some(content), None),
+            AssistantMessage::FunctionCall(fc) => (None, Some(fc)),
         };
 
         ChatCompletionRequestMessage {
             role: Role::Assistant,
-            content: content,
+            content,
             name: None,
             function_call: fc.map(Into::into),
         }
@@ -90,11 +86,11 @@ pub struct FunctionCall {
     pub args: String,
 }
 
-impl Into<async_openai::types::FunctionCall> for FunctionCall {
-    fn into(self) -> async_openai::types::FunctionCall {
+impl From<FunctionCall> for async_openai::types::FunctionCall {
+    fn from(fc: FunctionCall) -> async_openai::types::FunctionCall {
         async_openai::types::FunctionCall {
-            name: self.name.to_string(),
-            arguments: self.args.to_string(),
+            name: fc.name.to_string(),
+            arguments: fc.args.to_string(),
         }
     }
 }

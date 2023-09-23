@@ -67,22 +67,22 @@ where
     }
 }
 
-impl<Func, Args, Fut> Into<Function> for FunctionBuilder<Func, Args, Fut>
+impl<Func, Args, Fut> From<FunctionBuilder<Func, Args, Fut>> for Function
 where
     Func: FnMut(Args) -> Fut + Send + 'static,
     Args: FunctionArguments + DeserializeOwned + Send,
     Fut: Future<Output = Result<String, anyhow::Error>> + Send,
 {
-    fn into(self) -> Function {
-        assert!(self.name.is_some(), "Name is required");
-        assert!(self.execute.is_some(), "Execute is required");
+    fn from(fb: FunctionBuilder<Func, Args, Fut>) -> Self {
+        assert!(fb.name.is_some(), "Name is required");
+        assert!(fb.execute.is_some(), "Execute is required");
 
         Function {
-            name: self.name.unwrap(),
-            description: self.description,
+            name: fb.name.unwrap(),
+            description: fb.description,
             args: Args::json_schema(),
             execute: Box::new(move |args| {
-                let execute = Arc::clone(self.execute.as_ref().unwrap());
+                let execute = Arc::clone(fb.execute.as_ref().unwrap());
 
                 async move {
                     let args = serde_json::from_str(&args).unwrap();

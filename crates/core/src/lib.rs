@@ -189,8 +189,7 @@ where
         let function = self
             .functions
             .iter_mut()
-            .filter(|f| f.name == name)
-            .next()
+            .find(|f| f.name == name)
             .ok_or_else(|| ExecuteFunctionError::FunctionNotFound(name.to_string()))?;
 
         Ok((function.execute)(args.to_string()).await?)
