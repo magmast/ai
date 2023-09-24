@@ -9,7 +9,7 @@ use ai_chat_derive::FunctionArguments;
 use anyhow::{anyhow, Context};
 use dialoguer::Confirm;
 use directories::ProjectDirs;
-use futures::prelude::*;
+use futures::{pin_mut, prelude::*};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::process::Command;
@@ -58,16 +58,19 @@ async fn run(project_dirs: ProjectDirs) -> anyhow::Result<()> {
         "../../../assets/execute_python_script_description.txt"
     )));
 
-    let response = chat
-        .send(
-            std::env::args()
-                .skip(1)
-                .reduce(|acc, arg| format!("{} {}", acc, arg))
-                .context("Sorry, but I cannot help, if your message is empty.")?,
-        )
-        .await?;
+    let responses = chat.send(
+        std::env::args()
+            .skip(1)
+            .reduce(|acc, arg| format!("{} {}", acc, arg))
+            .context("Sorry, but I cannot help, if your message is empty.")?,
+    );
 
-    println!("{response}");
+    pin_mut!(responses);
+
+    while let Ok(response) = responses.next().await.context("Failed to send message.") {
+        let response = response?;
+        println!("{response}");
+    }
 
     Ok(())
 }

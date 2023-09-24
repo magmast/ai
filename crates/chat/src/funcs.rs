@@ -23,11 +23,13 @@ impl From<&Function> for FunctionDeclaration {
     }
 }
 
+pub(crate) type BoxExecute = Box<dyn FnMut(&str) -> BoxFuture<'static, String>>;
+
 pub struct Function {
     pub(crate) name: String,
     pub(crate) description: Option<String>,
     pub(crate) args: Value,
-    pub(crate) execute: Box<dyn FnMut(&str) -> BoxFuture<'static, String>>,
+    pub(crate) execute: BoxExecute,
 }
 
 impl From<BoxFunctionBuilder> for Function {
@@ -55,7 +57,7 @@ pub struct BoxFunctionBuilder {
     name: String,
     description: Option<String>,
     args: Value,
-    execute: Box<dyn FnMut(&str) -> BoxFuture<'static, String>>,
+    execute: BoxExecute,
 }
 
 impl<Marker> From<MarkedFunctionBuilder<Marker>> for BoxFunctionBuilder {
@@ -83,7 +85,7 @@ pub struct MarkedFunctionBuilder<Marker> {
     name: String,
     description: Option<String>,
     args: Value,
-    execute: Box<dyn FnMut(&str) -> BoxFuture<'static, String>>,
+    execute: BoxExecute,
 }
 
 impl<Func, Args, Fut, Out> From<Func> for MarkedFunctionBuilder<(Args, Fut, Out)>

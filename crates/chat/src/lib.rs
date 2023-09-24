@@ -3,17 +3,22 @@ pub mod funcs;
 pub mod history;
 pub mod utils;
 
+use std::sync::Arc;
+
 use async_openai::{
     config::OpenAIConfig,
     error::OpenAIError,
     types::{ChatCompletionFunctions, CreateChatCompletionRequest},
     Client,
 };
+use async_stream::stream;
 use async_trait::async_trait;
 use dto::{AssistantMessage, Message};
 use funcs::{Function, FunctionDeclaration};
+use futures::{pin_mut, Stream, StreamExt};
 use history::{History, NoopHistory};
 use serde_json::json;
+use tokio::sync::Mutex;
 use tracing::debug;
 
 const DEFAULT_HISTORY_LIMIT: usize = 15;
@@ -26,7 +31,7 @@ where
     platform: P,
     system_message: Option<String>,
     functions: Vec<Function>,
-    history: Cache<H>,
+    history: Arc<Mutex<Cache<H>>>,
     /// Maximum number of messages in history.
     history_limit: usize,
 }
@@ -40,7 +45,7 @@ where
         Self {
             platform: P::default(),
             history_limit: DEFAULT_HISTORY_LIMIT,
-            history: Cache::from(H::default()),
+            history: Arc::new(Mutex::new(Cache::from(H::default()))),
             functions: vec![],
             system_message: None,
         }
@@ -54,7 +59,7 @@ where
 {
     fn from(history: H) -> Self {
         Self {
-            history: Cache::from(history),
+            history: Arc::new(Mutex::new(Cache::from(history))),
             platform: P::default(),
             history_limit: DEFAULT_HISTORY_LIMIT,
             functions: vec![],
@@ -84,91 +89,107 @@ where
         self
     }
 
-    pub async fn send(
+    pub fn send(
         &mut self,
         message: impl ToString,
-    ) -> Result<String, SendError<P::Err, H::Err>> {
-        let messages = self
-            .build_messages(message)
-            .await
-            .map_err(SendError::ReadHistory)?;
+    ) -> impl Stream<Item = Result<String, SendError<P::Err, H::Err>>> + '_ {
+        let message = message.to_string();
 
-        let (content, messages) = self.send_impl(messages).await?;
+        stream! {
+            let messages = self
+                .build_messages(message)
+                .await
+                .map_err(SendError::ReadHistory)?;
 
-        let messages = messages
-            .into_iter()
-            .filter(|message| !message.is_system())
-            .collect::<Vec<_>>();
+            let history_limit = self.history_limit;
+            let history = Arc::clone(&self.history);
 
-        let messages_len = messages.len();
+            let responses = self.send_impl(messages);
+            pin_mut!(responses);
+            while let Some(result) = responses.next().await {
+                let (content, messages) = result?;
 
-        let messages = if messages_len > self.history_limit {
-            messages
-                .into_iter()
-                .skip(self.history_limit.abs_diff(messages_len))
-                .collect()
-        } else {
-            messages
-        };
+                let messages = messages
+                    .into_iter()
+                    .filter(|message| !message.is_system())
+                    .collect::<Vec<_>>();
 
-        self.history
-            .write(messages)
-            .await
-            .map_err(SendError::WriteHistory)?;
+                let messages_len = messages.len();
 
-        Ok(content)
+                let messages = if messages_len > history_limit {
+                    messages
+                        .into_iter()
+                        .skip(history_limit.abs_diff(messages_len))
+                        .collect()
+                } else {
+                    messages
+                };
+
+                history
+                    .lock()
+                    .await
+                    .write(messages)
+                    .await
+                    .map_err(SendError::WriteHistory)?;
+
+                yield Ok(content);
+            }
+        }
     }
 
-    async fn send_impl(
+    fn send_impl(
         &mut self,
         mut messages: Vec<Message>,
-    ) -> Result<(String, Vec<Message>), SendError<P::Err, H::Err>> {
-        for _ in 0..10 {
-            let completion = self
-                .platform
-                .create_completion(
-                    messages.clone(),
-                    self.functions.iter().map(Into::into).collect::<Vec<_>>(),
-                )
-                .await?;
+    ) -> impl Stream<Item = Result<(String, Vec<Message>), SendError<P::Err, H::Err>>> + '_ {
+        stream! {
+            for _ in 0..10 {
+                let completion = self
+                    .platform
+                    .create_completion(
+                        messages.clone(),
+                        self.functions.iter().map(Into::into).collect::<Vec<_>>(),
+                    )
+                    .await?;
 
-            let (name, result) = match completion {
-                AssistantMessage::Content(content) => {
-                    messages.push(Message::Assistant(AssistantMessage::Content(
-                        content.clone(),
-                    )));
-                    return Ok((content, messages));
-                }
-                AssistantMessage::FunctionCall(fc) => {
-                    messages.push(Message::Assistant(AssistantMessage::FunctionCall(
-                        fc.clone(),
-                    )));
-
-                    if let Some(content) = fc.content {
-                        println!("{content}");
+                let (name, result) = match completion {
+                    AssistantMessage::Content(content) => {
+                        messages.push(Message::Assistant(AssistantMessage::Content(
+                            content.clone(),
+                        )));
+                        yield Ok((content, messages));
+                        return;
                     }
+                    AssistantMessage::FunctionCall(fc) => {
+                        messages.push(Message::Assistant(AssistantMessage::FunctionCall(
+                            fc.clone(),
+                        )));
 
-                    let result = match self.execute_function(&fc.name, &fc.args).await {
-                        Ok(result) => result,
-                        Err(err) => serde_json::to_string(&json!({
-                            "error": err.to_string(),
-                        }))
-                        .unwrap(),
-                    };
+                        if let Some(content) = fc.content {
+                            yield Ok((content, messages.clone()));
+                        }
 
-                    (fc.name, result)
-                }
-            };
+                        let result = match self.execute_function(&fc.name, &fc.args).await {
+                            Ok(result) => result,
+                            Err(err) => serde_json::to_string(&json!({
+                                "error": err.to_string(),
+                            }))
+                            .unwrap(),
+                        };
 
-            let message = Message::Function {
-                name,
-                content: result,
-            };
+                        (fc.name, result)
+                    }
+                };
 
-            messages.push(message);
+                let message = Message::Function {
+                    name,
+                    content: result,
+                };
+
+                messages.push(message);
+            }
+
+            yield Err(SendError::TooManyFunctionCalls);
         }
-
-        Err(SendError::TooManyFunctionCalls)
     }
 
     async fn execute_function(
@@ -189,7 +210,8 @@ where
         &mut self,
         user_message: impl ToString,
     ) -> Result<Vec<Message>, H::Err> {
-        let history = self.history.read().await?;
+        let mut history = self.history.lock().await;
+        let history = history.read().await?;
         let mut messages =
             Vec::with_capacity(history.len() + if self.system_message.is_some() { 2 } else { 1 });
 
