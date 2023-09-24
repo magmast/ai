@@ -3,8 +3,6 @@ pub mod funcs;
 pub mod history;
 pub mod utils;
 
-use std::future::Future;
-
 use async_openai::{
     config::OpenAIConfig,
     error::OpenAIError,
@@ -13,9 +11,8 @@ use async_openai::{
 };
 use async_trait::async_trait;
 use dto::{AssistantMessage, Message};
-use funcs::{Function, FunctionArguments, FunctionBuilder, FunctionDeclaration};
+use funcs::{Function, FunctionDeclaration};
 use history::{History, NoopHistory};
-use serde::de::DeserializeOwned;
 use serde_json::json;
 use tracing::debug;
 
@@ -77,16 +74,8 @@ where
     P: Platform,
     H: History + Send + Sync,
 {
-    pub fn function<Func, Args, Fut>(
-        &mut self,
-        fb: impl Into<FunctionBuilder<Func, Args, Fut>>,
-    ) -> &mut Self
-    where
-        Func: FnMut(Args) -> Fut + Send + Sync + 'static,
-        Args: FunctionArguments + DeserializeOwned + Send,
-        Fut: Future<Output = Result<String, anyhow::Error>> + Send,
-    {
-        self.functions.push(fb.into().into());
+    pub fn function(&mut self, fb: impl Into<Function>) -> &mut Self {
+        self.functions.push(fb.into());
         self
     }
 
@@ -139,7 +128,7 @@ where
                 .platform
                 .create_completion(
                     messages.clone(),
-                    self.functions.iter().map(|f| f.to_declaration()).collect(),
+                    self.functions.iter().map(Into::into).collect::<Vec<_>>(),
                 )
                 .await?;
 
@@ -193,7 +182,7 @@ where
             .find(|f| f.name == name)
             .ok_or_else(|| ExecuteFunctionError::FunctionNotFound(name.to_string()))?;
 
-        Ok((function.execute)(args.to_string()).await?)
+        Ok((function.execute)(args).await)
     }
 
     async fn build_messages(
@@ -277,7 +266,7 @@ impl Platform for OpenAiPlatform {
                     .map(|f| ChatCompletionFunctions {
                         name: f.name,
                         description: f.description,
-                        parameters: f.args,
+                        parameters: Some(f.args),
                     })
                     .collect(),
             ),

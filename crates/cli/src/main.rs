@@ -1,10 +1,11 @@
 use std::{collections::HashMap, process::ExitCode};
 
-use ai::{
+use ai_chat::{
     funcs::{FunctionArguments, FunctionBuilder},
     history::FileHistory,
     Chat, OpenAiPlatform,
 };
+use ai_chat_derive::FunctionArguments;
 use anyhow::{anyhow, Context};
 use dialoguer::Confirm;
 use directories::ProjectDirs;
@@ -50,16 +51,12 @@ async fn run(project_dirs: ProjectDirs) -> anyhow::Result<()> {
         })
         .to_string(),
     ))
-    .function(
-        Into::<FunctionBuilder<_, _, _>>::into(execute_shell_script).description(Some(
-            include_str!("../../../assets/execute_shell_script_description.txt").into(),
-        )),
-    )
-    .function(
-        Into::<FunctionBuilder<_, _, _>>::into(execute_python_script).description(Some(
-            include_str!("../../../assets/execute_python_script_description.txt").into(),
-        )),
-    );
+    .function(execute_shell_script.description(include_str!(
+        "../../../assets/execute_shell_script_description.txt"
+    )))
+    .function(execute_python_script.description(include_str!(
+        "../../../assets/execute_python_script_description.txt"
+    )));
 
     let response = chat
         .send(
@@ -115,26 +112,13 @@ async fn execute_script(script: Script<'_>) -> anyhow::Result<String> {
     )
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, FunctionArguments)]
 struct ExecuteShellScriptFunctionArgs {
+    #[arg(description = "Shell script to execute.")]
     script: String,
 }
 
-impl FunctionArguments for ExecuteShellScriptFunctionArgs {
-    fn json_schema() -> Option<serde_json::Value> {
-        Some(json!({
-            "type": "object",
-            "properties": {
-                "script": {
-                    "type": "string",
-                    "description": "Shell script to execute.",
-                }
-            }
-        }))
-    }
-}
-
-async fn execute_shell_script(args: ExecuteShellScriptFunctionArgs) -> anyhow::Result<String> {
+async fn execute_shell_script(args: ExecuteShellScriptFunctionArgs) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     let script = Script {
         kind: "powershell",
@@ -149,35 +133,23 @@ async fn execute_shell_script(args: ExecuteShellScriptFunctionArgs) -> anyhow::R
         content: &args.script,
     };
 
-    execute_script(script).await
+    execute_script(script).await.map_err(|err| err.to_string())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, FunctionArguments)]
 struct ExecutePythonScriptFunctionArgs {
+    #[arg(description = "Python script to execute.")]
     script: String,
 }
 
-impl FunctionArguments for ExecutePythonScriptFunctionArgs {
-    fn json_schema() -> Option<Value> {
-        Some(json!({
-            "type": "object",
-            "properties": {
-                "script": {
-                    "type": "string",
-                    "description": "Python script to execute.",
-                },
-            },
-        }))
-    }
-}
-
-async fn execute_python_script(args: ExecutePythonScriptFunctionArgs) -> anyhow::Result<String> {
+async fn execute_python_script(args: ExecutePythonScriptFunctionArgs) -> Result<String, String> {
     execute_script(Script {
         kind: "python",
         command: "python",
         content: &args.script,
     })
     .await
+    .map_err(|err| err.to_string())
 }
 
 fn useful_env() -> HashMap<String, String> {
