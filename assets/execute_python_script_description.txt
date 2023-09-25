@@ -1,1 +1,0 @@
-Executes python script in the current user directory and returns its stdout, stderr and status (only if program didn't exited through signal). This function treats both stdout and stderr as utf-8 encoded strings.

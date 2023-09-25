@@ -1,1 +1,0 @@
-Executes shell script (using cmd on windows, and sh on linux) in the current user directory and returns its stdout, stderr and status (only if program didn't exited through signal). This function treats both stdout and stderr as utf-8 encoded strings.

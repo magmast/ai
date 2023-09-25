@@ -11,7 +11,7 @@ To install `ai`, follow these steps:
 ```
 git clone https://github.com/magmast/ai.git
 cd ai
-cargo install --path crates/cli
+go install .
 ```
 
 ## Usage examples
