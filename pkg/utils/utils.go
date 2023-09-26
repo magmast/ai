@@ -1,9 +1,17 @@
 package utils
 
-func Map[I any, O any](s []I, f func(I) O) []O {
+func MapS[I any, O any](s []I, f func(I) O) []O {
 	result := make([]O, len(s))
 	for i, v := range s {
 		result[i] = f(v)
+	}
+	return result
+}
+
+func MapM[K comparable, I any, O any](m map[K]I, f func(I) O) map[K]O {
+	result := make(map[K]O)
+	for k, v := range m {
+		result[k] = f(v)
 	}
 	return result
 }

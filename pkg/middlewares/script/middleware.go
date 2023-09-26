@@ -39,16 +39,19 @@ type Config struct {
 }
 
 func New(config Config) chat.Middleware {
-	return funcs.With(chat.Function{
+	return funcs.With(funcs.Function{
 		Name:        config.Name,
 		Description: config.Description,
-		Args: func() json.Unmarshaler {
-			return &Args{}
+		Args: funcs.ArgsConfig{
+			"script": {
+				Type:        "string",
+				Description: "Script to execute",
+			},
 		},
-		Run: func(ctx context.Context, rawArgs json.Unmarshaler) (string, error) {
-			args := chat.Args[*Args](rawArgs)
+		Run: func(ctx context.Context, args funcs.Args) (string, error) {
+			script := funcs.Arg[string](args, "script")
 
-			allowed, err := ask.Bool("I need to execute the following script:\n\n%s\n\nDo you agree?", args.Script)
+			allowed, err := ask.Bool("I need to execute the following script:\n\n%s\n\nDo you agree?", script)
 			if err != nil {
 				return "failed to ask user if script execution is allowed, so script execution was not allowed", nil
 			}
@@ -60,7 +63,7 @@ func New(config Config) chat.Middleware {
 			stdout := new(bytes.Buffer)
 			stderr := new(bytes.Buffer)
 
-			cmd := config.Command(args.Script)
+			cmd := config.Command(script)
 			cmd.Stdout = stdout
 			cmd.Stderr = stderr
 			err = cmd.Run()

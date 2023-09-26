@@ -26,7 +26,7 @@ func (m *Middleware) Run(ctx context.Context, req chat.Request, next chat.Handle
 
 	res, err := m.Client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model: model,
-		Messages: utils.Map(req.Messages, func(m chat.Message) openai.ChatCompletionMessage {
+		Messages: utils.MapS(req.Messages, func(m chat.Message) openai.ChatCompletionMessage {
 			var fc *openai.FunctionCall
 			if m.FunctionCall != nil {
 				fc = &openai.FunctionCall{
@@ -42,11 +42,11 @@ func (m *Middleware) Run(ctx context.Context, req chat.Request, next chat.Handle
 				FunctionCall: fc,
 			}
 		}),
-		Functions: utils.Map(req.Functions, func(f chat.Function) openai.FunctionDefinition {
+		Functions: utils.MapS(req.Functions, func(f chat.Function) openai.FunctionDefinition {
 			return openai.FunctionDefinition{
 				Name:        f.Name,
 				Description: f.Description,
-				Parameters:  (&f).Parameters(),
+				Parameters:  f.Parameters,
 			}
 		}),
 	})

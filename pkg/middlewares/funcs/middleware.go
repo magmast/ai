@@ -2,9 +2,9 @@ package funcs
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/magmast/ai/pkg/chat"
-	"github.com/rs/zerolog/log"
 )
 
 type Middleware struct {
@@ -38,13 +38,13 @@ func (m *Middleware) RunFunc(ctx context.Context, req *chat.Request, fc *chat.Fu
 		return "function not found"
 	}
 
-	args := f.Args()
-	if err := args.UnmarshalJSON([]byte(fc.Arguments)); err != nil {
+	args := make(Args)
+	if err := json.Unmarshal([]byte(fc.Arguments), &args); err != nil {
 		return "invalid arguments"
 	}
 
-	log.Trace().Type("argsType", args).Str("function name", f.Name).Msg("running function")
-	out, err := f.Run(ctx, args)
+	r := runner(ctx, f.Name)
+	out, err := r(ctx, args)
 	if err != nil {
 		return err.Error()
 	}
@@ -64,15 +64,18 @@ func (m *Middleware) FindFunc(req *chat.Request, name string) *chat.Function {
 
 type withFunctionMiddleware struct {
 	f chat.Function
+	r Runner
 }
 
-func With(f chat.Function) chat.Middleware {
+func With(f Function) chat.Middleware {
 	return &withFunctionMiddleware{
-		f: f,
+		f: f.Function(),
+		r: f.Run,
 	}
 }
 
 func (m *withFunctionMiddleware) Run(ctx context.Context, req chat.Request, next chat.Handler) (*chat.Response, error) {
 	req.Functions = append(req.Functions, m.f)
-	return next(ctx, req)
+	c := WithRunner(ctx, m.f.Name, m.r)
+	return next(c, req)
 }
