@@ -1,9 +1,12 @@
 package middlewares
 
 import (
+	"os"
+
 	"github.com/magmast/ai/pkg/chat"
 	"github.com/magmast/ai/pkg/middlewares/funcs"
 	"github.com/magmast/ai/pkg/middlewares/history"
+	"github.com/magmast/ai/pkg/middlewares/imgen"
 	"github.com/magmast/ai/pkg/middlewares/limit"
 	"github.com/magmast/ai/pkg/middlewares/openai"
 	"github.com/magmast/ai/pkg/middlewares/python"
@@ -23,10 +26,19 @@ func NewHistory(backend history.Backend, format history.Format) chat.Middleware 
 	}
 }
 
+func NewImgen(client *gopenai.Client) chat.Middleware {
+	return imgen.New(client)
+}
+
 func NewLimit(n int) chat.Middleware {
 	return &limit.Middleware{
 		Limit: n,
 	}
+}
+
+type OpenAIConfig struct {
+	Client *gopenai.Client
+	Model  string
 }
 
 func NewOpenAI(config ...OpenAIConfig) chat.Middleware {
@@ -35,14 +47,16 @@ func NewOpenAI(config ...OpenAIConfig) chat.Middleware {
 		c = &config[0]
 	}
 
-	var apiKey string
-	if c != nil {
-		apiKey = c.ApiKey
-	}
+	var client *gopenai.Client
+	if c != nil && c.Client != nil {
+		client = c.Client
+	} else {
+		apiKey := os.Getenv("OPENAI_API_KEY")
+		if apiKey == "" {
+			panic("OPENAI_API_KEY is not set")
+		}
 
-	clientConfig := gopenai.DefaultConfig(apiKey)
-	if c != nil && c.BaseURL != "" {
-		clientConfig.BaseURL = c.BaseURL
+		client = gopenai.NewClient(apiKey)
 	}
 
 	var model string
@@ -51,21 +65,9 @@ func NewOpenAI(config ...OpenAIConfig) chat.Middleware {
 	}
 
 	return &openai.Middleware{
-		Client: gopenai.NewClientWithConfig(clientConfig),
+		Client: client,
 		Model:  model,
 	}
-}
-
-type OpenAIConfig struct {
-	BaseURL string
-	ApiKey  string
-	Model   string
-}
-
-var DefaultOpenAIConfig = OpenAIConfig{
-	BaseURL: "https://api.openai.com",
-	ApiKey:  "",
-	Model:   "gpt-3.5-turbo-16k",
 }
 
 func NewPython() chat.Middleware {

@@ -1,12 +1,13 @@
 package cmd
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/adrg/xdg"
+	"github.com/magmast/ai/internal/state"
 	"github.com/magmast/ai/pkg/chat"
 	"github.com/magmast/ai/pkg/middlewares"
 	"github.com/magmast/ai/pkg/middlewares/history"
@@ -15,16 +16,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func init() {
+	rootCmd.PersistentFlags().StringVarP(&apiKey, "api-key", "k", os.Getenv("OPENAI_API_KEY"), "OpenAI API key")
+	rootCmd.PersistentFlags().StringVarP(&baseUrl, "base-url", "u", os.Getenv("OPENAI_BASE_URL"), "OpenAI API base URL")
+}
+
 var (
 	apiKey  string
 	baseUrl string
 
 	rootCmd = &cobra.Command{
-		Use:  "ai",
-		Args: cobra.MinimumNArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
+		Use:   "ai",
+		Short: "Extend terminal with OpenAI",
+		Args:  cobra.MinimumNArgs(1),
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			if apiKey == "" {
-				apiKey = os.Getenv("OPENAI_API_KEY")
+				return errors.New("either OPENAI_API_KEY environment variable or --api-key flag must be set")
 			}
 
 			config := gopenai.DefaultConfig(apiKey)
@@ -32,9 +39,20 @@ var (
 				config.BaseURL = baseUrl
 			}
 
+			client := gopenai.NewClientWithConfig(config)
+
+			cmd.SetContext(state.Set(cmd.Context(), &state.State{
+				Client: client,
+			}))
+
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s := state.Get(cmd.Context())
+
 			historyPath, err := xdg.StateFile("ai/history.json")
 			if err != nil {
-				log.Fatal().Err(err).Msg("failed to get history file path")
+				return fmt.Errorf("failed to get history file path: %w", err)
 			}
 
 			chat := &chat.Chat{
@@ -43,30 +61,26 @@ var (
 					middlewares.NewLimit(15),
 					middlewares.NewShell(),
 					middlewares.NewPython(),
+					middlewares.NewImgen(s.Client),
 					middlewares.NewFuncs(),
-					middlewares.NewSystem("You're a command line tool 'ai'. Your task is to talk with user and help him solve any problem using the available functions. Please remember that they return stdout, stderr and status when creating scripts (use print statements in python)."),
+					middlewares.NewSystem("You're a command line tool 'ai'. Your task is to talk with user and help him solve any problem using the available functions."),
 					middlewares.NewOpenAI(middlewares.OpenAIConfig{
-						BaseURL: baseUrl,
-						ApiKey:  apiKey,
-						Model:   "gpt-3.5-turbo-16k",
+						Client: s.Client,
+						Model:  "localmodels__llama-2-7b-chat-ggml__llama-2-7b-chat.ggmlv3.q8_0.bin",
 					}),
 				},
 			}
 
-			res, err := chat.Send(context.TODO(), strings.Join(args, " "))
+			res, err := chat.Send(cmd.Context(), strings.Join(args, " "))
 			if err != nil {
-				log.Fatal().Err(err).Msg("failed to send message")
+				return fmt.Errorf("failed to send message: %w", err)
 			}
 
-			fmt.Println(res.Message.Content)
+			_, err = fmt.Println(res.Message.Content)
+			return err
 		},
 	}
 )
-
-func init() {
-	rootCmd.PersistentFlags().StringVarP(&apiKey, "api-key", "k", "", "OpenAI API key")
-	rootCmd.PersistentFlags().StringVarP(&baseUrl, "base-url", "u", "", "OpenAI base URL")
-}
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {

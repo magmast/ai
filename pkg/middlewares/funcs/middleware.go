@@ -3,6 +3,7 @@ package funcs
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/magmast/ai/pkg/chat"
 )
@@ -35,21 +36,31 @@ func (m *Middleware) Run(ctx context.Context, req chat.Request, next chat.Handle
 func (m *Middleware) RunFunc(ctx context.Context, req *chat.Request, fc *chat.FunctionCall) string {
 	f := m.FindFunc(req, fc.Name)
 	if f == nil {
-		return "function not found"
+		return `{"error":"function not found"}`
 	}
 
-	args := make(Args)
+	args := make(map[string]any)
 	if err := json.Unmarshal([]byte(fc.Arguments), &args); err != nil {
-		return "invalid arguments"
+		return `{"error":"invalid arguments"}`
 	}
 
 	r := runner(ctx, f.Name)
-	out, err := r(ctx, args)
-	if err != nil {
-		return err.Error()
+	out := r(&Context{
+		Context: ctx,
+		Args:    args,
+	})
+	key := "data"
+	if err, ok := out.(error); ok {
+		key = "error"
+		out = err.Error()
 	}
 
-	return out
+	outBs, err := json.Marshal(map[string]any{key: out})
+	if err != nil {
+		return fmt.Errorf("failed to marshal output: %w", err).Error()
+	}
+
+	return string(outBs)
 }
 
 func (m *Middleware) FindFunc(req *chat.Request, name string) *chat.Function {

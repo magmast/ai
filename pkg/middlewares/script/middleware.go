@@ -2,7 +2,6 @@ package script
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +11,8 @@ import (
 	"github.com/magmast/ai/pkg/chat"
 	"github.com/magmast/ai/pkg/middlewares/funcs"
 )
+
+var ErrUserDeclined = errors.New("user declined script execution")
 
 type Args struct {
 	Script string
@@ -42,21 +43,24 @@ func New(config Config) chat.Middleware {
 	return funcs.With(funcs.Function{
 		Name:        config.Name,
 		Description: config.Description,
-		Args: funcs.ArgsConfig{
+		Args: funcs.Args{
 			"script": {
 				Type:        "string",
 				Description: "Script to execute",
 			},
 		},
-		Run: func(ctx context.Context, args funcs.Args) (string, error) {
-			script := funcs.Arg[string](args, "script")
+		Run: func(fCtx *funcs.Context) any {
+			script, err := fCtx.String("script")
+			if err != nil {
+				return fmt.Errorf("failed to get script: %w", err)
+			}
 
 			allowed, err := ask.Bool("I need to execute the following script:\n\n%s\n\nDo you agree?", script)
 			if err != nil {
-				return "failed to ask user if script execution is allowed, so script execution was not allowed", nil
+				return fmt.Errorf("failed to ask user if script execution is allowed, so script execution was not allowed: %w", err)
 			}
 			if !allowed {
-				return "user declined script execution", nil
+				return ErrUserDeclined
 			}
 
 			status := 0
@@ -70,10 +74,10 @@ func New(config Config) chat.Middleware {
 			if errors.Is(err, &exec.ExitError{}) {
 				status = err.(*exec.ExitError).ExitCode()
 			} else if err != nil {
-				return fmt.Sprintf("failed to execute script: %s", err), nil
+				return fmt.Errorf("failed to execute script: %w", err)
 			}
 
-			result := struct {
+			return struct {
 				Status int
 				Stdout string
 				Stderr string
@@ -82,13 +86,6 @@ func New(config Config) chat.Middleware {
 				Stdout: stdout.String(),
 				Stderr: stderr.String(),
 			}
-
-			bs, err := json.Marshal(result)
-			if err != nil {
-				return fmt.Sprintf("failed to marshal stdout: %s", err), nil
-			}
-
-			return string(bs), nil
 		},
 	})
 }

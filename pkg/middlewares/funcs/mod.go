@@ -1,15 +1,13 @@
 package funcs
 
 import (
-	"context"
-
 	"github.com/magmast/ai/pkg/chat"
 )
 
 type Function struct {
 	Name        string
 	Description string
-	Args        ArgsConfig
+	Args        Args
 	Run         Runner
 }
 
@@ -19,22 +17,30 @@ func (b *Function) Function() chat.Function {
 		Description: b.Description,
 		Parameters: map[string]any{
 			"type":       "object",
-			"properties": b.Args,
+			"properties": b.Args.Map(),
 		},
 	}
 }
 
-type Runner func(context.Context, Args) (string, error)
+type Runner func(*Context) any
 
-type ArgsConfig map[string]ArgConfig
+type Args map[string]Arg
 
-type ArgConfig struct {
+func (a Args) Map() map[string]map[string]any {
+	m := make(map[string]map[string]any, len(a))
+	for k, v := range a {
+		m[k] = v.Map()
+	}
+	return m
+}
+
+type Arg struct {
 	Type        string
 	Description string
 	Enum        []any
 }
 
-func (a *ArgConfig) Map() map[string]any {
+func (a *Arg) Map() map[string]any {
 	m := map[string]any{}
 
 	if a.Type != "" {
@@ -50,10 +56,4 @@ func (a *ArgConfig) Map() map[string]any {
 	}
 
 	return m
-}
-
-type Args map[string]any
-
-func Arg[T any](a Args, n string) T {
-	return a[n].(T)
 }
